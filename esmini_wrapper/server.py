@@ -31,8 +31,7 @@ class EsminiService(sim_server_pb2_grpc.SimServerServicer):
 
     def Init(self, request, context):
         logger.debug(f"Received Init request from client: {context.peer()}")
-        cfg = request.config.config
-        config = MessageToDict(cfg)
+        config = MessageToDict(request.config.config)
         output_dir = request.output_dir.path
         self.dt = request.dt
 
