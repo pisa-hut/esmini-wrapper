@@ -26,7 +26,7 @@ USER ubuntu
 WORKDIR /opt/esmini
 RUN chown ubuntu:ubuntu /opt/esmini
 
-ADD --chown=ubuntu:ubuntu https://github.com/esmini/esmini.git .
+ADD --chown=ubuntu:ubuntu https://github.com/esmini/esmini.git#65082e52cfb5ec5bbca16f4a6bb322fa928395bc .
 
 RUN <<EOF
     cmake -B build/ -S . \

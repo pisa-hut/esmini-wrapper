@@ -3,7 +3,7 @@ import logging
 from pathlib import Path
 from typing import Any, Optional
 
-from pisa_api.scenario_pb2 import ScenarioPack
+from pisa_api.scenario_pb2 import ScenarioPack, Scenario
 from pisa_api.object_pb2 import (
     ObjectState,
     ObjectKinematic,
@@ -145,19 +145,26 @@ TYPE_MAP = {
 
 
 class EsminiAdapter:
-    def __init__(self, output_base: str, cfg: dict):
-        self._output_base = Path(output_base)
-        self._output_dir = self._output_base / "concrete"
+    def __init__(self):
         self._time_ns = 0
-        self.cfg = cfg
-        self.esmini_home = self.cfg.get("esmini_home", "/opt/esmini/")
-        self.se = ct.CDLL(self.esmini_home + "bin/libesminiLib.so")  # Linux
-        self._c_param_cb = None
-        self._params_obj = None
-        self._params_ptr = None
+
         self.ego_car = None
         self.objects: list[ObjectState] = []
-        self._setup_function_signatures()
+
+        # init
+        self.cfg = None
+        self.scenario = None
+        self._output_base = None
+
+        self.esmini_home = None
+        self.se = None
+
+        # reset
+        self._output_dir = None
+
+        self._params_obj = None
+        self._params_ptr = None
+        self._c_param_cb = None
 
     def _setup_esmini_opts(self):
         self.se.SE_SetSeed(1234)
@@ -370,8 +377,126 @@ class EsminiAdapter:
         se.SE_SetDatFilePath.argtypes = [ct.c_char_p]
         se.SE_SetDatFilePath.restype = None
 
-    def init(self, runtime_spec: dict, sps: ScenarioPack) -> None:
-        pass
+    def init(self, config: dict, output_base: str, scenario: Scenario) -> None:
+        self.cfg = config
+        self._output_base = Path(output_base)
+        self.scenario = scenario
+
+        self.esmini_home = self.cfg.get("esmini_home", "/opt/esmini/")
+        self.se = ct.CDLL(self.esmini_home + "bin/libesminiLib.so")  # Linux
+        self._setup_function_signatures()
+
+    def reset(
+        self, output_related: str, sps: ScenarioPack, params: Optional[dict] = None
+    ):
+        self._output_dir = self._output_base / Path(output_related)
+
+        self.stop()
+
+        # Reset time
+        self._time_ns = 0
+
+        if params is None:
+            params = {}
+
+        # 1) 把 params 包成 py_object，並轉成 void* 當 user_data
+        self._params_obj = ct.py_object(params)
+        self._params_ptr = ct.cast(ct.pointer(self._params_obj), ct.c_void_p)
+
+        # 2) 建立一次 C 用的 callback（void (*)(void*)）
+        if self._c_param_cb is None:
+
+            @self._PARAM_CB_TYPE
+            def _c_param_cb(user_data):
+
+                py_obj_ptr = ct.cast(user_data, ct.POINTER(ct.py_object))
+                params_dict = py_obj_ptr.contents.value
+
+                # 呼叫你自己的高階 callback
+                self.parameter_declaration_callback(params_dict)
+
+            self._c_param_cb = _c_param_cb  # hold reference
+
+        # 3) 在 SE_Init 前註冊 callback
+        self.se.SE_RegisterParameterDeclarationCallback(
+            self._c_param_cb,
+            self._params_ptr,
+        )
+        use_viewer, threads, record = self._setup_esmini_opts()
+        map_name = sps.map_name
+        map_path = Path(f"/mnt/map/xodr/{map_name}.xodr").resolve()
+        self.se.SE_AddPath(str(map_path.parent).encode())
+        disable_controller = 1  # 0 to enable built-in controllers, 1 to disable
+        xosc_name = sps.name
+        xosc_path = Path(f"/mnt/scenario/{xosc_name}.xosc").resolve()
+        ret = self.se.SE_Init(
+            str(xosc_path).encode(),
+            disable_controller,
+            use_viewer,
+            threads,
+            record,
+        )
+        if ret != 0:
+            raise RuntimeError(f"esmini SE_Init failed with code {ret}")
+
+        self.obj_count = self.se.SE_GetNumberOfObjects()
+        self.objects = []
+        for i in range(0, self.obj_count):
+            obj_state = SEScenarioObjectState()
+            self.se.SE_GetObjectState(self.se.SE_GetId(i), ct.byref(obj_state))
+
+            esmini_obj_type = int(obj_state.objectType)
+            obj_category = int(obj_state.objectCategory)
+            obj_type = RoadObjectType.UNKNOWN
+            if esmini_obj_type == 2:  # Pedestrian type
+                if obj_category == 0:  # Pedestrian
+                    obj_type = RoadObjectType.PEDESTRIAN
+                elif obj_category == 1:  # Wheelchair
+                    obj_type = RoadObjectType.WHEELCHAIR
+                elif obj_category == 2:  # Animal
+                    obj_type = RoadObjectType.ANIMAL
+                else:
+                    obj_type = RoadObjectType.UNKNOWN
+            else:  # Vehicle type
+                obj_type = TYPE_MAP.get(obj_category, RoadObjectType.UNKNOWN)
+
+            obj_kinematic = ObjectKinematic(
+                time_ns=int(obj_state.timestamp * 1e9),
+                x=float(obj_state.x),
+                y=float(obj_state.y),
+                z=float(obj_state.z),
+                yaw=float(obj_state.h),
+                speed=float(obj_state.speed),
+            )
+
+            obj_shape = Shape(
+                type=ShapeType.BOUNDING_BOX,
+                dimensions=Shape.Dimension(
+                    x=float(obj_state.length),
+                    y=float(obj_state.width),
+                    z=float(obj_state.height),
+                ),
+            )
+
+            obj = ObjectState(
+                type=obj_type,
+                kinematic=obj_kinematic,
+                shape=obj_shape,
+            )
+            self.objects.append(obj)
+
+        # Create ego vehicle helper
+        self.ego_car = Vehicle(
+            self.se,
+            x=float(self.objects[0].kinematic.x),
+            y=float(self.objects[0].kinematic.y),
+            h=float(self.objects[0].kinematic.yaw),
+            length=float(self.objects[0].shape.dimensions.x),
+            speed=float(self.objects[0].kinematic.speed),
+        )
+
+        # objects = [i.to_pb() for i in self.objects]
+        return self.objects
 
     def step(self, ctrl: CtrlCmd, time_stamp_ns: int):
         # ctrl = Ctrl.from_pb(ctrl)
@@ -519,118 +644,6 @@ class EsminiAdapter:
 
         # 這個 return 給自己用就好，C callback 是 void，不會用到
         return 0
-
-    def reset(
-        self, output_related: str, sps: ScenarioPack, params: Optional[dict] = None
-    ):
-        self._output_dir = self._output_base / Path(output_related)
-
-        self.stop()
-
-        # Reset time
-        self._time_ns = 0
-
-        if params is None:
-            params = {}
-
-        # 1) 把 params 包成 py_object，並轉成 void* 當 user_data
-        self._params_obj = ct.py_object(params)
-        self._params_ptr = ct.cast(ct.pointer(self._params_obj), ct.c_void_p)
-
-        # 2) 建立一次 C 用的 callback（void (*)(void*)）
-        if self._c_param_cb is None:
-
-            @self._PARAM_CB_TYPE
-            def _c_param_cb(user_data):
-
-                py_obj_ptr = ct.cast(user_data, ct.POINTER(ct.py_object))
-                params_dict = py_obj_ptr.contents.value
-
-                # 呼叫你自己的高階 callback
-                self.parameter_declaration_callback(params_dict)
-
-            self._c_param_cb = _c_param_cb  # hold reference
-
-        # 3) 在 SE_Init 前註冊 callback
-        self.se.SE_RegisterParameterDeclarationCallback(
-            self._c_param_cb,
-            self._params_ptr,
-        )
-        use_viewer, threads, record = self._setup_esmini_opts()
-        map_name = sps.map_name
-        map_path = Path(f"/mnt/map/xodr/{map_name}.xodr").resolve()
-        self.se.SE_AddPath(str(map_path.parent).encode())
-        disable_controller = 1  # 0 to enable built-in controllers, 1 to disable
-        xosc_name = sps.name
-        xosc_path = Path(f"/mnt/scenario/{xosc_name}.xosc").resolve()
-        ret = self.se.SE_Init(
-            str(xosc_path).encode(),
-            disable_controller,
-            use_viewer,
-            threads,
-            record,
-        )
-        if ret != 0:
-            raise RuntimeError(f"esmini SE_Init failed with code {ret}")
-
-        self.obj_count = self.se.SE_GetNumberOfObjects()
-        self.objects = []
-        for i in range(0, self.obj_count):
-            obj_state = SEScenarioObjectState()
-            self.se.SE_GetObjectState(self.se.SE_GetId(i), ct.byref(obj_state))
-
-            esmini_obj_type = int(obj_state.objectType)
-            obj_category = int(obj_state.objectCategory)
-            obj_type = RoadObjectType.UNKNOWN
-            if esmini_obj_type == 2:  # Pedestrian type
-                if obj_category == 0:  # Pedestrian
-                    obj_type = RoadObjectType.PEDESTRIAN
-                elif obj_category == 1:  # Wheelchair
-                    obj_type = RoadObjectType.WHEELCHAIR
-                elif obj_category == 2:  # Animal
-                    obj_type = RoadObjectType.ANIMAL
-                else:
-                    obj_type = RoadObjectType.UNKNOWN
-            else:  # Vehicle type
-                obj_type = TYPE_MAP.get(obj_category, RoadObjectType.UNKNOWN)
-
-            obj_kinematic = ObjectKinematic(
-                time_ns=int(obj_state.timestamp * 1e9),
-                x=float(obj_state.x),
-                y=float(obj_state.y),
-                z=float(obj_state.z),
-                yaw=float(obj_state.h),
-                speed=float(obj_state.speed),
-            )
-
-            obj_shape = Shape(
-                type=ShapeType.BOUNDING_BOX,
-                dimensions=Shape.Dimension(
-                    x=float(obj_state.length),
-                    y=float(obj_state.width),
-                    z=float(obj_state.height),
-                ),
-            )
-
-            obj = ObjectState(
-                type=obj_type,
-                kinematic=obj_kinematic,
-                shape=obj_shape,
-            )
-            self.objects.append(obj)
-
-        # Create ego vehicle helper
-        self.ego_car = Vehicle(
-            self.se,
-            x=float(self.objects[0].kinematic.x),
-            y=float(self.objects[0].kinematic.y),
-            h=float(self.objects[0].kinematic.yaw),
-            length=float(self.objects[0].shape.dimensions.x),
-            speed=float(self.objects[0].kinematic.speed),
-        )
-
-        # objects = [i.to_pb() for i in self.objects]
-        return self.objects
 
     # define a function returning if the simulator need to stop
     def should_quit(self):

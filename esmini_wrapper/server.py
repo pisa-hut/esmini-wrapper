@@ -1,10 +1,10 @@
 from pprint import pprint
 
-import asyncio
 import grpc
 from concurrent import futures
-import os
 import logging
+import os
+from time import sleep
 
 from google.protobuf.json_format import MessageToDict
 
@@ -23,7 +23,7 @@ logging.basicConfig(
 
 class EsminiService(sim_server_pb2_grpc.SimServerServicer):
     def __init__(self):
-        self._esmini = None
+        self._esmini = EsminiAdapter()
 
     def Ping(self, request, context):
         logger.debug(f"Received ping from client: {context.peer()}")
@@ -32,23 +32,26 @@ class EsminiService(sim_server_pb2_grpc.SimServerServicer):
     def Init(self, request, context):
         logger.debug(f"Received Init request from client: {context.peer()}")
         config = MessageToDict(request.config.config)
-        output_dir = request.output_dir.path
-        self.dt = request.dt
-
-        if self._esmini is None:
-            self._esmini = EsminiAdapter(output_dir, config)
+        output_base = request.output_dir.path
         pprint(config)
+        scenario = request.scenario
+        if scenario.format != "OpenScenario1":
+            logger.error(f"Unsupported scenario format: {scenario.format}")
+            return sim_server_pb2.SimServerMessages.InitResponse(
+                success=False, msg=f"Unsupported scenario format: {scenario.format}"
+            )
 
+        self._esmini.init(config, output_base, scenario)
         return sim_server_pb2.SimServerMessages.InitResponse(
             success=True, msg="Esmini initialized"
         )
 
     def Reset(self, request, context):
         logger.debug(f"Received Reset request from client: {context.peer()}")
-        output_dir = request.output_dir.path
+        output_related = request.output_dir.path
         sps = request.scenario_pack
         params = request.params
-        objects = self._esmini.reset(output_dir, sps, params)
+        objects = self._esmini.reset(output_related, sps, params)
         return sim_server_pb2.SimServerMessages.ResetResponse(objects=objects)
 
     def Step(self, request, context):
@@ -70,14 +73,7 @@ class EsminiService(sim_server_pb2_grpc.SimServerServicer):
 
 
 def serve():
-    server = grpc.server(
-        futures.ThreadPoolExecutor(max_workers=4),
-        options=[
-            ("grpc.keepalive_time_ms", 10000),
-            ("grpc.keepalive_timeout_ms", 5000),
-            ("grpc.keepalive_permit_without_calls", True),
-        ],
-    )
+    server = grpc.server(futures.ThreadPoolExecutor(max_workers=4))
 
     sim_server_pb2_grpc.add_SimServerServicer_to_server(EsminiService(), server)
 
