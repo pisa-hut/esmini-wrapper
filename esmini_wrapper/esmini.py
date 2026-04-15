@@ -152,6 +152,7 @@ class EsminiAdapter:
         self.objects: list[ObjectState] = []
 
         # init
+        self.initialized = False
         self.cfg = None
         self.scenario = None
         self._output_base = None
@@ -378,6 +379,7 @@ class EsminiAdapter:
         se.SE_SetDatFilePath.restype = None
 
     def init(self, config: dict, output_base: str, scenario: Scenario) -> None:
+        self.initialized = True
         self.cfg = config
         self._output_base = Path(output_base)
         self.scenario = scenario
@@ -389,6 +391,8 @@ class EsminiAdapter:
     def reset(
         self, output_related: str, sps: ScenarioPack, params: Optional[dict] = None
     ):
+        if not self.initialized:
+            raise RuntimeError("EsminiAdapter not initialized. Call init() first.")
         self._output_dir = self._output_base / Path(output_related)
 
         self.stop()
