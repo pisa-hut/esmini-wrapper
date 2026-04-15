@@ -384,8 +384,10 @@ class EsminiAdapter:
         self._output_base = Path(output_base)
         self.scenario = scenario
 
-        self.esmini_home = self.cfg.get("esmini_home", "/opt/esmini/")
-        self.se = ct.CDLL(self.esmini_home + "bin/libesminiLib.so")  # Linux
+        lib_path = Path(self.esmini_home) / "bin" / "libesminiLib.so"
+        if not lib_path.is_file():
+            raise FileNotFoundError(f"esmini shared library not found at: {lib_path}")
+        self.se = ct.CDLL(str(lib_path))  # Linux
         self._setup_function_signatures()
 
     def reset(
