@@ -55,7 +55,13 @@ class EsminiService(sim_server_pb2_grpc.SimServerServicer):
         output_related = request.output_dir.path
         sps = request.scenario_pack
         params = request.params
-        objects = self._esmini.reset(output_related, sps, params)
+        try:
+            objects = self._esmini.reset(output_related, sps, params)
+        except RuntimeError as e:
+            logger.error(f"Failed to reset Esmini: {e}")
+            context.set_code(grpc.StatusCode.FAILED_PRECONDITION)
+            context.set_details(f"Failed to reset Esmini: {e}")
+            return sim_server_pb2.SimServerMessages.ResetResponse()
         return sim_server_pb2.SimServerMessages.ResetResponse(objects=objects)
 
     def Step(self, request, context):
