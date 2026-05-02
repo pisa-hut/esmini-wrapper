@@ -1,16 +1,14 @@
+import logging
+import os
+from concurrent import futures
 from pprint import pprint
 
 import grpc
-from concurrent import futures
-import logging
-import os
-
-from google.protobuf.json_format import MessageToDict
-
-from pisa_api import sim_server_pb2, sim_server_pb2_grpc
-from pisa_api.pong_pb2 import Pong
-from pisa_api.empty_pb2 import Empty
 from esmini import EsminiAdapter
+from google.protobuf.json_format import MessageToDict
+from pisa_api import sim_server_pb2, sim_server_pb2_grpc
+from pisa_api.empty_pb2 import Empty
+from pisa_api.pong_pb2 import Pong
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(
@@ -50,9 +48,7 @@ class EsminiService(sim_server_pb2_grpc.SimServerServicer):
             )
 
         self.initialized = True
-        return sim_server_pb2.SimServerMessages.InitResponse(
-            success=True, msg="Esmini initialized"
-        )
+        return sim_server_pb2.SimServerMessages.InitResponse(success=True, msg="Esmini initialized")
 
     def Reset(self, request, context):
         logger.debug(f"Received Reset request from client: {context.peer()}")
@@ -78,9 +74,7 @@ class EsminiService(sim_server_pb2_grpc.SimServerServicer):
         logger.debug(f"Received Step request with timestamp_ns={request.timestamp_ns}")
         if not self.initialized:
             context.set_code(grpc.StatusCode.FAILED_PRECONDITION)
-            context.set_details(
-                "Esmini adapter not initialized. Call Init and Reset first."
-            )
+            context.set_details("Esmini adapter not initialized. Call Init and Reset first.")
             return sim_server_pb2.SimServerMessages.StepResponse()
         ctrl_cmd = request.ctrl_cmd
         timestamp_ns = request.timestamp_ns
@@ -97,9 +91,7 @@ class EsminiService(sim_server_pb2_grpc.SimServerServicer):
         logger.debug(f"Received Stop request from client: {context.peer()}")
         if not self.initialized:
             context.set_code(grpc.StatusCode.FAILED_PRECONDITION)
-            context.set_details(
-                "Esmini adapter not initialized. Call Init and Reset first."
-            )
+            context.set_details("Esmini adapter not initialized. Call Init and Reset first.")
             return Empty()
         try:
             self._esmini.stop()
@@ -112,9 +104,7 @@ class EsminiService(sim_server_pb2_grpc.SimServerServicer):
     def ShouldQuit(self, request, context):
         logger.debug(f"Received ShouldQuit request from client: {context.peer()}")
         if not self.initialized:
-            return sim_server_pb2.SimServerMessages.ShouldQuitResponse(
-                should_quit=False
-            )
+            return sim_server_pb2.SimServerMessages.ShouldQuitResponse(should_quit=False)
         return sim_server_pb2.SimServerMessages.ShouldQuitResponse(
             should_quit=self._esmini.should_quit()
         )

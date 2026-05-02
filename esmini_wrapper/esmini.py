@@ -1,17 +1,17 @@
 import ctypes as ct
 import logging
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
-from pisa_api.scenario_pb2 import ScenarioPack, Scenario
+from pisa_api.control_pb2 import CtrlCmd, CtrlMode
 from pisa_api.object_pb2 import (
-    ObjectState,
     ObjectKinematic,
+    ObjectState,
+    RoadObjectType,
     Shape,
     ShapeType,
-    RoadObjectType,
 )
-from pisa_api.control_pb2 import CtrlCmd, CtrlMode
+from pisa_api.scenario_pb2 import Scenario, ScenarioPack
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(
@@ -94,13 +94,9 @@ class Vehicle:
             throttle = ctrl.payload["throttle"]
             steer = ctrl.payload["steer"]
             brake = ctrl.payload["brake"]
-            final_throttle = (
-                throttle - brake
-            )  # Simple way to combine throttle and brake
+            final_throttle = throttle - brake  # Simple way to combine throttle and brake
 
-            self._se.SE_SimpleVehicleControlAnalog(
-                self.sv_handle, dt_s, final_throttle, steer
-            )
+            self._se.SE_SimpleVehicleControlAnalog(self.sv_handle, dt_s, final_throttle, steer)
             # Update vehicle state
             self._se.SE_SimpleVehicleGetState(self.sv_handle, ct.byref(self.vh_state))
 
@@ -389,9 +385,7 @@ class EsminiAdapter:
         self.se = ct.CDLL(str(lib_path))  # Linux
         self._setup_function_signatures()
 
-    def reset(
-        self, output_related: str, sps: ScenarioPack, params: Optional[dict] = None
-    ):
+    def reset(self, output_related: str, sps: ScenarioPack, params: dict | None = None):
         self._output_dir = self._output_base / Path(output_related)
 
         self.stop()
@@ -598,9 +592,7 @@ class EsminiAdapter:
 
         for name, value in params.items():
             if name not in param_type:
-                logger.warning(
-                    f"Parameter {name} not found in esmini parameters. Skip."
-                )
+                logger.warning(f"Parameter {name} not found in esmini parameters. Skip.")
                 continue
 
             ptype = param_type[name]
@@ -608,9 +600,7 @@ class EsminiAdapter:
                 try:
                     v = int(value)
                 except (TypeError, ValueError):
-                    logger.warning(
-                        f"Parameter {name} value {value} is not an int. Skip."
-                    )
+                    logger.warning(f"Parameter {name} value {value} is not an int. Skip.")
                     continue
 
                 self.se.SE_SetParameterInt(name.encode("utf-8"), v)
@@ -619,9 +609,7 @@ class EsminiAdapter:
                 try:
                     v = float(value)
                 except (TypeError, ValueError):
-                    logger.warning(
-                        f"Parameter {name} value {value} is not a float. Skip."
-                    )
+                    logger.warning(f"Parameter {name} value {value} is not a float. Skip.")
                     continue
 
                 self.se.SE_SetParameterDouble(name.encode("utf-8"), v)
@@ -634,9 +622,7 @@ class EsminiAdapter:
                 try:
                     v = bool(value)
                 except (TypeError, ValueError):
-                    logger.warning(
-                        f"Parameter {name} value {value} is not a bool. Skip."
-                    )
+                    logger.warning(f"Parameter {name} value {value} is not a bool. Skip.")
                     continue
 
                 self.se.SE_SetParameterBool(name.encode("utf-8"), v)
