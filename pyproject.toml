@@ -5,7 +5,7 @@ description = "An esmini wrapper for SBSVS"
 readme = "README.md"
 requires-python = "==3.10.*"
 dependencies = [
-    "pisa-api>=0.1.20"
+    "pisa-api>=0.2.0"
 ]
 
 [dependency-groups]
