@@ -548,8 +548,7 @@ class EsminiAdapter:
             )
 
             if ret_state != 0:
-                logger.warning(f"SE_GetObjectState failed for object id {i}")
-                print(f"ret = {ret_state}, id = {se.SE_GetId(i)}")
+                logger.warning(f"SE_GetObjectState failed for object id {i} (ret={ret_state})")
                 continue
 
             kinematic = ObjectKinematic(
@@ -604,7 +603,7 @@ class EsminiAdapter:
                     continue
 
                 self.se.SE_SetParameterInt(name.encode("utf-8"), v)
-                logger.info(f"  set {name} = {v}")
+                logger.debug(f"  set {name} = {v}")
             elif ptype == 2:  # double
                 try:
                     v = float(value)
@@ -613,11 +612,11 @@ class EsminiAdapter:
                     continue
 
                 self.se.SE_SetParameterDouble(name.encode("utf-8"), v)
-                logger.info(f"  set {name} = {v}")
+                logger.debug(f"  set {name} = {v}")
             elif ptype == 3:  # string
                 v = str(value)
                 self.se.SE_SetParameterString(name.encode("utf-8"), v.encode("utf-8"))
-                logger.info(f"  set {name} = {v}")
+                logger.debug(f"  set {name} = {v}")
             elif ptype == 4:  # bool
                 try:
                     v = bool(value)
@@ -626,7 +625,7 @@ class EsminiAdapter:
                     continue
 
                 self.se.SE_SetParameterBool(name.encode("utf-8"), v)
-                logger.info(f"  set {name} = {v}")
+                logger.debug(f"  set {name} = {v}")
             else:
                 logger.warning(f"Parameter {name} has unknown type {ptype}. Skip.")
                 continue

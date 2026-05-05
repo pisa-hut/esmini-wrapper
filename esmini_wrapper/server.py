@@ -1,5 +1,4 @@
 import logging
-from pprint import pprint
 
 import grpc
 from esmini import EsminiAdapter
@@ -23,7 +22,7 @@ class EsminiService(BaseSimServer):
         logger.debug(f"Received Init request from client: {context.peer()}")
         config = MessageToDict(request.config.config)
         output_base = request.output_dir.path
-        pprint(config)
+        logger.debug(f"Init config: {config}")
         scenario = request.scenario
         if scenario.format != "open_scenario1":
             logger.error(f"Unsupported scenario format: {scenario.format}")
