@@ -42,6 +42,8 @@ EOF
 
 RUN rm -f config.yml
 
+COPY ./misc/Catalogs /opt/Catalogs
+
 WORKDIR /app
 COPY ./pyproject.toml .
 COPY ./uv.lock .
