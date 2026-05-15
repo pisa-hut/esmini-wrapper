@@ -26,18 +26,23 @@ USER ubuntu
 WORKDIR /opt/esmini
 RUN chown ubuntu:ubuntu /opt/esmini
 
-ADD --chown=ubuntu:ubuntu https://github.com/esmini/esmini.git#65082e52cfb5ec5bbca16f4a6bb322fa928395bc .
+# ADD --chown=ubuntu:ubuntu https://github.com/esmini/esmini.git#65082e52cfb5ec5bbca16f4a6bb322fa928395bc .
+ADD --chown=ubuntu:ubuntu https://github.com/esmini/esmini.git#a8e18fce72e283e9b8b5ae2183d8f8faad34aecb .
 
-RUN <<EOF
-    cmake -B build/ -S . \
+RUN  <<EOF
+    cmake -G Ninja -B build/ -S . \
+    -DCMAKE_BUILD_TYPE=Release \
     -DENABLE_COLORED_DIAGNOSTICS=ON \
     -DENABLE_WARNINGS_AS_ERRORS=ON \
     -DDOWNLOAD_EXTERNALS=OFF \
     -DENABLE_CCACHE=ON \
     -DBUILD_EXAMPLES=OFF \
     -DUSE_IMPLOT=OFF \
-    -DUSE_OSG=OFF -DUSE_OSI=OFF -DUSE_SUMO=OFF -DUSE_GTEST=OFF
-    cmake --build build/ --config Release --target install -j
+    -DUSE_OSG=OFF \
+    -DUSE_OSI=OFF \
+    -DUSE_SUMO=OFF \
+    -DUSE_GTEST=OFF
+    cmake --build build/ --target install -j$(nproc)
 EOF
 
 RUN rm -f config.yml

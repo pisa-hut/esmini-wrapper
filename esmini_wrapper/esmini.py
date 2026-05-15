@@ -24,49 +24,52 @@ logging.basicConfig(
 )
 
 
+SEId = ct.c_uint32
+
+
 class SEScenarioObjectState(ct.Structure):
     _fields_ = [
         ("id", ct.c_int),
         ("model_id", ct.c_int),
-        ("control", ct.c_int),
-        ("timestamp", ct.c_float),
-        ("x", ct.c_float),
-        ("y", ct.c_float),
-        ("z", ct.c_float),
-        ("h", ct.c_float),
-        ("p", ct.c_float),
-        ("r", ct.c_float),
-        ("roadId", ct.c_int),
-        ("junctionId", ct.c_int),
-        ("t", ct.c_float),
+        ("ctrl_type", ct.c_int),
+        ("timestamp", ct.c_double),
+        ("x", ct.c_double),
+        ("y", ct.c_double),
+        ("z", ct.c_double),
+        ("h", ct.c_double),
+        ("p", ct.c_double),
+        ("r", ct.c_double),
+        ("roadId", SEId),
+        ("junctionId", SEId),
+        ("t", ct.c_double),
         ("laneId", ct.c_int),
-        ("laneOffset", ct.c_float),
-        ("s", ct.c_float),
-        ("speed", ct.c_float),
-        ("centerOffsetX", ct.c_float),
-        ("centerOffsetY", ct.c_float),
-        ("centerOffsetZ", ct.c_float),
-        ("width", ct.c_float),
-        ("length", ct.c_float),
-        ("height", ct.c_float),
+        ("laneOffset", ct.c_double),
+        ("s", ct.c_double),
+        ("speed", ct.c_double),
+        ("centerOffsetX", ct.c_double),
+        ("centerOffsetY", ct.c_double),
+        ("centerOffsetZ", ct.c_double),
+        ("width", ct.c_double),
+        ("length", ct.c_double),
+        ("height", ct.c_double),
         ("objectType", ct.c_int),
         ("objectCategory", ct.c_int),
-        ("wheelAngle", ct.c_float),
-        ("wheelRot", ct.c_float),
+        ("wheel_angle", ct.c_double),
+        ("wheel_rot", ct.c_double),
         ("visibilityMask", ct.c_int),
     ]
 
 
 class SESimpleVehicleState(ct.Structure):
     _fields_ = [
-        ("x", ct.c_float),
-        ("y", ct.c_float),
-        ("z", ct.c_float),
-        ("h", ct.c_float),
-        ("p", ct.c_float),
-        ("speed", ct.c_float),
-        ("wheel_rotation", ct.c_float),
-        ("wheel_angle", ct.c_float),
+        ("x", ct.c_double),
+        ("y", ct.c_double),
+        ("z", ct.c_double),
+        ("h", ct.c_double),
+        ("p", ct.c_double),
+        ("speed", ct.c_double),
+        ("wheel_rotation", ct.c_double),
+        ("wheel_angle", ct.c_double),
     ]
 
 
@@ -207,29 +210,37 @@ class EsminiAdapter:
     def _setup_function_signatures(self):
         se = self.se
 
+        # SE_DLL_API int SE_AddPath(const char *path);
+        se.SE_AddPath.argtypes = [ct.c_char_p]
+        se.SE_AddPath.restype = ct.c_int
+
+        # SE_DLL_API void SE_SetLogFilePath(const char *logFilePath);
+        se.SE_SetLogFilePath.argtypes = [ct.c_char_p]
+        se.SE_SetLogFilePath.restype = None
+
         # SE_DLL_API int SE_GetObjectState(int object_id, SE_ScenarioObjectState *state);
         se.SE_GetObjectState.argtypes = [ct.c_int, ct.POINTER(SEScenarioObjectState)]
         se.SE_GetObjectState.restype = ct.c_int
 
-        # SE_DLL_API float SE_GetObjectAcceleration(int object_id);
+        # SE_DLL_API double SE_GetObjectAcceleration(int object_id);
         se.SE_GetObjectAcceleration.argtypes = [ct.c_int]
-        se.SE_GetObjectAcceleration.restype = ct.c_float
+        se.SE_GetObjectAcceleration.restype = ct.c_double
 
-        # SE_DLL_API int SE_GetObjectAngularAcceleration(int object_id, float *h_acc, float *p_acc, float *r_acc);
+        # SE_DLL_API int SE_GetObjectAngularAcceleration(int object_id, double *h_acc, double *p_acc, double *r_acc);
         se.SE_GetObjectAngularAcceleration.argtypes = [
             ct.c_int,
-            ct.POINTER(ct.c_float),
-            ct.POINTER(ct.c_float),
-            ct.POINTER(ct.c_float),
+            ct.POINTER(ct.c_double),
+            ct.POINTER(ct.c_double),
+            ct.POINTER(ct.c_double),
         ]
         se.SE_GetObjectAngularAcceleration.restype = ct.c_int
 
-        # SE_DLL_API int SE_GetObjectAngularVelocity(int object_id, float *h_rate, float *p_rate, float *r_rate);
+        # SE_DLL_API int SE_GetObjectAngularVelocity(int object_id, double *h_rate, double *p_rate, double *r_rate);
         se.SE_GetObjectAngularVelocity.argtypes = [
             ct.c_int,
-            ct.POINTER(ct.c_float),
-            ct.POINTER(ct.c_float),
-            ct.POINTER(ct.c_float),
+            ct.POINTER(ct.c_double),
+            ct.POINTER(ct.c_double),
+            ct.POINTER(ct.c_double),
         ]
         se.SE_GetObjectAngularVelocity.restype = ct.c_int
 
@@ -237,13 +248,13 @@ class EsminiAdapter:
         # se.SE_GetObjectTypeName.argtypes = [ct.c_int]
         # se.SE_GetObjectTypeName.restype = ct.c_char_p
 
-        # SE_DLL_API void *SE_SimpleVehicleCreate(float x, float y, float h, float length, float speed);
+        # SE_DLL_API void *SE_SimpleVehicleCreate(double x, double y, double h, double length, double speed);
         se.SE_SimpleVehicleCreate.argtypes = [
-            ct.c_float,
-            ct.c_float,
-            ct.c_float,
-            ct.c_float,
-            ct.c_float,
+            ct.c_double,
+            ct.c_double,
+            ct.c_double,
+            ct.c_double,
+            ct.c_double,
         ]
         se.SE_SimpleVehicleCreate.restype = ct.c_void_p
 
@@ -252,7 +263,10 @@ class EsminiAdapter:
         se.SE_SimpleVehicleDelete.restype = None
 
         # SE_DLL_API void SE_SimpleVehicleGetState(void *handleSimpleVehicle, SE_SimpleVehicleState *state);
-        se.SE_SimpleVehicleGetState.argtypes = [ct.c_void_p, ct.c_void_p]
+        se.SE_SimpleVehicleGetState.argtypes = [
+            ct.c_void_p,
+            ct.POINTER(SESimpleVehicleState),
+        ]
         se.SE_SimpleVehicleGetState.restype = None
 
         # SE_DLL_API void SE_SimpleVehicleControlBinary(void *handleSimpleVehicle, double dt, int throttle, int steering);
@@ -282,21 +296,30 @@ class EsminiAdapter:
         ]
         se.SE_SimpleVehicleControlTarget.restype = None
 
-        se.SE_SimpleVehicleSetSpeed.argtypes = [ct.c_void_p, ct.c_float]
+        se.SE_SimpleVehicleSetSpeed.argtypes = [ct.c_void_p, ct.c_double]
+        se.SE_SimpleVehicleSetSpeed.restype = None
 
-        se.SE_ReportObjectWheelStatus.argtypes = [ct.c_int, ct.c_float, ct.c_float]
+        # SE_DLL_API int SE_ReportObjectWheelStatus(int object_id, double rotation, double angle);
+        se.SE_ReportObjectWheelStatus.argtypes = [
+            ct.c_int,
+            ct.c_double,
+            ct.c_double,
+        ]
+        se.SE_ReportObjectWheelStatus.restype = ct.c_int
 
-        # SE_DLL_API int SE_ReportObjectSpeed(int object_id, float speed);
-        se.SE_ReportObjectSpeed.argtypes = [ct.c_int, ct.c_float]
+        # SE_DLL_API int SE_ReportObjectSpeed(int object_id, double speed);
+        se.SE_ReportObjectSpeed.argtypes = [ct.c_int, ct.c_double]
         se.SE_ReportObjectSpeed.restype = ct.c_int
 
+        # SE_DLL_API int SE_ReportObjectPosXYH(int object_id, double x, double y, double h);
         se.SE_ReportObjectPosXYH.argtypes = [
             ct.c_int,
-            ct.c_float,
-            ct.c_float,
-            ct.c_float,
-            ct.c_float,
+            ct.c_double,
+            ct.c_double,
+            ct.c_double,
         ]
+        se.SE_ReportObjectPosXYH.restype = ct.c_int
+
         # SE_DLL_API void SE_RegisterParameterDeclarationCallback(void (*fnPtr)(void *), void *user_data);
         self._PARAM_CB_TYPE = ct.CFUNCTYPE(None, ct.c_void_p)
         self.se.SE_RegisterParameterDeclarationCallback.argtypes = [
@@ -319,7 +342,7 @@ class EsminiAdapter:
         self.se.SE_SetWindowPosAndSize.restype = None
 
         # SE_DLL_API const char *SE_GetVariableName(int index, int *type);
-        self.se.SE_GetVariableName.argtypes = [ct.c_int, ct.c_char_p]
+        self.se.SE_GetVariableName.argtypes = [ct.c_int, ct.POINTER(ct.c_int)]
         self.se.SE_GetVariableName.restype = ct.c_char_p
 
         # SE_DLL_API void SE_SetSeed(unsigned int seed);
@@ -328,23 +351,27 @@ class EsminiAdapter:
 
         # SE_DLL_API int SE_SetParameterBool(const char *parameterName, bool value);
         self.se.SE_SetParameterBool.argtypes = [ct.c_char_p, ct.c_bool]
-        self.se.SE_SetParameterBool.restype = None
+        self.se.SE_SetParameterBool.restype = ct.c_int
 
-        # SE_DLL_API int SE_GetVariableInt(const char *variableName, int *value);
+        # SE_DLL_API int SE_SetParameterInt(const char *parameterName, int value);
         self.se.SE_SetParameterInt.argtypes = [ct.c_char_p, ct.c_int]
-        self.se.SE_SetParameterInt.restype = None
+        self.se.SE_SetParameterInt.restype = ct.c_int
 
-        # SE_DLL_API int SE_GetVariableDouble(const char *variableName, double *value);
+        # SE_DLL_API int SE_SetParameterDouble(const char *parameterName, double value);
         self.se.SE_SetParameterDouble.argtypes = [ct.c_char_p, ct.c_double]
-        self.se.SE_SetParameterDouble.restype = None
+        self.se.SE_SetParameterDouble.restype = ct.c_int
 
-        # SE_DLL_API int SE_GetVariableString(const char *variableName, const char **value);
+        # SE_DLL_API int SE_SetParameterString(const char *parameterName, const char *value);
         self.se.SE_SetParameterString.argtypes = [ct.c_char_p, ct.c_char_p]
-        self.se.SE_SetParameterString.restype = None
+        self.se.SE_SetParameterString.restype = ct.c_int
 
         # SE_DLL_API const char *SE_GetParameterName(int index, int *type);
         se.SE_GetParameterName.argtypes = [ct.c_int, ct.POINTER(ct.c_int)]
         se.SE_GetParameterName.restype = ct.c_char_p
+
+        # SE_DLL_API int SE_GetNumberOfParameters();
+        se.SE_GetNumberOfParameters.argtypes = []
+        se.SE_GetNumberOfParameters.restype = ct.c_int
 
         # SE_DLL_API int SE_GetNumberOfObjects()
         se.SE_GetNumberOfObjects.argtypes = []
@@ -366,10 +393,13 @@ class EsminiAdapter:
         se.SE_GetObjectCollision.argtypes = [ct.c_int, ct.c_int]
         se.SE_GetObjectCollision.restype = ct.c_int
 
-        se.SE_GetSimTimeStep.restype = ct.c_float
+        # SE_DLL_API double SE_GetSimTimeStep();
+        se.SE_GetSimTimeStep.argtypes = []
+        se.SE_GetSimTimeStep.restype = ct.c_double
 
-        # SE_DLL_API float SE_GetSimulationTime();
-        se.SE_GetSimulationTime.restype = ct.c_float
+        # SE_DLL_API double SE_GetSimulationTime();
+        se.SE_GetSimulationTime.argtypes = []
+        se.SE_GetSimulationTime.restype = ct.c_double
 
         # SE_DLL_API int SE_Init(const char *oscFilename, int disable_ctrls, int use_viewer, int threads, int record);
         se.SE_Init.argtypes = [
@@ -381,16 +411,27 @@ class EsminiAdapter:
         ]
         se.SE_Init.restype = ct.c_int
 
-        se.SE_StepDT.argtypes = [ct.c_float]
+        # SE_DLL_API int SE_StepDT(double dt);
+        se.SE_StepDT.argtypes = [ct.c_double]
+        se.SE_StepDT.restype = ct.c_int
 
+        se.SE_GetQuitFlag.argtypes = []
         se.SE_GetQuitFlag.restype = ct.c_int
 
         se.SE_SetOptionPersistent.argtypes = [ct.c_char_p]
         se.SE_SetOptionPersistent.restype = ct.c_int
 
+        # SE_DLL_API int SE_UnsetOption(const char *name);
+        se.SE_UnsetOption.argtypes = [ct.c_char_p]
+        se.SE_UnsetOption.restype = ct.c_int
+
         # SE_DLL_API void SE_SetDatFilePath(const char *datFilePath);
         se.SE_SetDatFilePath.argtypes = [ct.c_char_p]
         se.SE_SetDatFilePath.restype = None
+
+        # SE_DLL_API void SE_Close();
+        se.SE_Close.argtypes = []
+        se.SE_Close.restype = None
 
     def init(self, config: dict, output_base: str, scenario: Scenario) -> None:
         self.cfg = config
@@ -585,7 +626,6 @@ class EsminiAdapter:
         obj_id = se.SE_GetId(0)
         se.SE_ReportObjectPosXYH(
             obj_id,
-            0.0,
             self.ego_car.vh_state.x,
             self.ego_car.vh_state.y,
             self.ego_car.vh_state.h,
@@ -610,17 +650,17 @@ class EsminiAdapter:
             obj_accel = se.SE_GetObjectAcceleration(se.SE_GetId(i))
 
             # Get object angular velocity
-            h_rate = ct.c_float()
-            p_rate = ct.c_float()
-            r_rate = ct.c_float()
+            h_rate = ct.c_double()
+            p_rate = ct.c_double()
+            r_rate = ct.c_double()
             ret_rate = se.SE_GetObjectAngularVelocity(
                 se.SE_GetId(i), ct.byref(h_rate), ct.byref(p_rate), ct.byref(r_rate)
             )
 
             # Get object angular acceleration
-            h_acc = ct.c_float()
-            p_acc = ct.c_float()
-            r_acc = ct.c_float()
+            h_acc = ct.c_double()
+            p_acc = ct.c_double()
+            r_acc = ct.c_double()
             ret_acc = se.SE_GetObjectAngularAcceleration(
                 se.SE_GetId(i), ct.byref(h_acc), ct.byref(p_acc), ct.byref(r_acc)
             )
