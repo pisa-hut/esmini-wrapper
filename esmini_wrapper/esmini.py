@@ -1,20 +1,24 @@
 import ctypes as ct
 import logging
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
-from google.protobuf.struct_pb2 import Struct
-from pisa_api.collision_pb2 import CollisionInfo
-from pisa_api.control_pb2 import CtrlCmd, CtrlMode
-from pisa_api.object_pb2 import (
-    ObjectKinematic,
-    ObjectState,
+from pisa_api.simulator import (
+    CollisionInfoData,
+    ControlCommand,
+    ControlMode,
+    InitRequest,
+    ObjectKinematicData,
+    ObjectStateData,
+    ResetRequest,
     RoadObjectType,
-    Shape,
+    RuntimeFrameData,
+    ShapeData,
+    ShapeDimensionData,
     ShapeType,
+    StepRequest,
 )
-from pisa_api.runtime_frame_pb2 import RuntimeFrame
-from pisa_api.scenario_pb2 import Scenario, ScenarioPack
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(
@@ -82,17 +86,17 @@ class Vehicle:
         self.vh_state = SESimpleVehicleState()
         self._se.SE_SimpleVehicleGetState(self.sv_handle, ct.byref(self.vh_state))
 
-    def apply_control(self, ctrl: CtrlCmd, dt_s: float):
-        if ctrl.mode == CtrlMode.NONE:
+    def apply_control(self, ctrl: ControlCommand, dt_s: float):
+        if ctrl.mode == ControlMode.NONE:
             return
-        elif ctrl.mode == CtrlMode.THROTTLE_STEER:
+        elif ctrl.mode == ControlMode.THROTTLE_STEER:
             pedal = ctrl.payload["pedal"]
             wheel = ctrl.payload["wheel"]
             self._se.SE_SimpleVehicleControlBinary(self.sv_handle, dt_s, pedal, wheel)
             # Update vehicle state
             self._se.SE_SimpleVehicleGetState(self.sv_handle, ct.byref(self.vh_state))
 
-        elif ctrl.mode == CtrlMode.THROTTLE_STEER_BREAK:
+        elif ctrl.mode == ControlMode.THROTTLE_STEER_BREAK:
             # throttle = float(ctrl.payload.get("throttle", 0.0))
             # steer = float(ctrl.payload.get("steer", 0.0))
             # brake = float(ctrl.payload.get("brake", 0.0))
@@ -106,7 +110,7 @@ class Vehicle:
             # Update vehicle state
             self._se.SE_SimpleVehicleGetState(self.sv_handle, ct.byref(self.vh_state))
 
-        elif ctrl.mode == CtrlMode.ACKERMANN:
+        elif ctrl.mode == ControlMode.ACKERMANN:
             # target_speed = ctrl.payload.get("speed", self.vh_state.speed)
             target_speed = ctrl.payload["speed"]
             # heading_to_target = ctrl.payload.get("steer", self.vh_state.h)
@@ -117,7 +121,7 @@ class Vehicle:
             # Update vehicle state
             self._se.SE_SimpleVehicleGetState(self.sv_handle, ct.byref(self.vh_state))
 
-        elif ctrl.mode == CtrlMode.POSITION:
+        elif ctrl.mode == ControlMode.POSITION:
             x = ctrl.payload.get("x", self.vh_state.x)
             y = ctrl.payload.get("y", self.vh_state.y)
             h = ctrl.payload.get("h", self.vh_state.h)
@@ -151,7 +155,7 @@ class EsminiAdapter:
         self._time_ns = 0
 
         self.ego_car = None
-        self.objects: list[ObjectState] = []
+        self.objects: list[ObjectStateData] = []
 
         # init
         self.cfg = None
@@ -433,10 +437,10 @@ class EsminiAdapter:
         se.SE_Close.argtypes = []
         se.SE_Close.restype = None
 
-    def init(self, config: dict, output_base: str, scenario: Scenario) -> None:
-        self.cfg = config
-        self._output_base = Path(output_base)
-        self.scenario = scenario
+    def init(self, request: InitRequest) -> None:
+        self.cfg = request.config
+        self._output_base = request.output_dir
+        self.scenario = request.scenario
 
         self.esmini_home = self.cfg.get("esmini_home", "/opt/esmini/")
         lib_path = Path(self.esmini_home) / "bin" / "libesminiLib.so"
@@ -456,8 +460,8 @@ class EsminiAdapter:
     def _set_collision_detection(self, enabled: bool) -> None:
         self.se.SE_CollisionDetection(enabled)
 
-    def _collect_collision_info(self) -> list[CollisionInfo]:
-        collisions: list[CollisionInfo] = []
+    def _collect_collision_info(self) -> list[CollisionInfoData]:
+        collisions: list[CollisionInfoData] = []
         seen_pairs: set[tuple[int, int]] = set()
 
         for object_index in range(self.obj_count):
@@ -477,16 +481,13 @@ class EsminiAdapter:
                     continue
                 seen_pairs.add(pair)
 
-                details = Struct()
-                details.update(
-                    {
-                        "source": "esmini",
-                        "object_id_a": actor_a,
-                        "object_id_b": actor_b,
-                    }
-                )
+                details = {
+                    "source": "esmini",
+                    "object_id_a": actor_a,
+                    "object_id_b": actor_b,
+                }
                 collisions.append(
-                    CollisionInfo(
+                    CollisionInfoData(
                         occurred=True,
                         actor_a=actor_a,
                         actor_b=actor_b,
@@ -496,16 +497,15 @@ class EsminiAdapter:
 
         return collisions
 
-    def reset(self, output_related: str, sps: ScenarioPack, params: dict | None = None):
-        self._output_dir = self._output_base / Path(output_related)
+    def reset(self, request: ResetRequest):
+        self._output_dir = self._output_base / request.output_dir
 
         self.stop()
 
         # Reset time
         self._time_ns = 0
 
-        if params is None:
-            params = {}
+        params = request.params
 
         # 1) 把 params 包成 py_object，並轉成 void* 當 user_data
         self._params_obj = ct.py_object(params)
@@ -531,11 +531,11 @@ class EsminiAdapter:
             self._params_ptr,
         )
         use_viewer, threads, record = self._setup_esmini_opts()
-        map_name = sps.map_name
+        map_name = request.scenario_pack.map_name
         map_path = Path(f"/mnt/map/xodr/{map_name}.xodr").resolve()
         self.se.SE_AddPath(str(map_path.parent).encode())
         disable_controller = 1  # 0 to enable built-in controllers, 1 to disable
-        xosc_name = sps.name
+        xosc_name = request.scenario_pack.name
         xosc_path = Path(f"/mnt/scenario/{xosc_name}.xosc").resolve()
         ret = self.se.SE_Init(
             str(xosc_path).encode(),
@@ -570,7 +570,7 @@ class EsminiAdapter:
             else:  # Vehicle type
                 obj_type = TYPE_MAP.get(obj_category, RoadObjectType.UNKNOWN)
 
-            obj_kinematic = ObjectKinematic(
+            obj_kinematic = ObjectKinematicData(
                 time_ns=int(obj_state.timestamp * 1e9),
                 x=float(obj_state.x),
                 y=float(obj_state.y),
@@ -579,16 +579,16 @@ class EsminiAdapter:
                 speed=float(obj_state.speed),
             )
 
-            obj_shape = Shape(
+            obj_shape = ShapeData(
                 type=ShapeType.BOUNDING_BOX,
-                dimensions=Shape.Dimension(
+                dimensions=ShapeDimensionData(
                     x=float(obj_state.length),
                     y=float(obj_state.width),
                     z=float(obj_state.height),
                 ),
             )
 
-            obj = ObjectState(
+            obj = ObjectStateData(
                 type=obj_type,
                 kinematic=obj_kinematic,
                 shape=obj_shape,
@@ -606,7 +606,7 @@ class EsminiAdapter:
         )
 
         collisions = self._collect_collision_info()
-        runtime_frame = RuntimeFrame(
+        runtime_frame = RuntimeFrameData(
             sim_time_ns=self._time_ns,
             objects=self.objects,
             collision=collisions,
@@ -614,15 +614,15 @@ class EsminiAdapter:
 
         return runtime_frame
 
-    def step(self, ctrl: CtrlCmd, time_stamp_ns: int):
+    def step(self, request: StepRequest):
         # ctrl = Ctrl.from_pb(ctrl)
-        dt_s = (time_stamp_ns - self._time_ns) / 1e9
-        self._time_ns = time_stamp_ns
+        dt_s = (request.timestamp_ns - self._time_ns) / 1e9
+        self._time_ns = request.timestamp_ns
 
         se = self.se
 
         # Update vehicle control
-        self.ego_car.apply_control(ctrl, dt_s)
+        self.ego_car.apply_control(request.ctrl_cmd, dt_s)
         obj_id = se.SE_GetId(0)
         se.SE_ReportObjectPosXYH(
             obj_id,
@@ -669,7 +669,7 @@ class EsminiAdapter:
                 logger.warning(f"SE_GetObjectState failed for object id {i} (ret={ret_state})")
                 continue
 
-            kinematic = ObjectKinematic(
+            kinematic = ObjectKinematicData(
                 time_ns=int(obj_state.timestamp * 1e9),
                 x=float(obj_state.x),
                 y=float(obj_state.y),
@@ -680,10 +680,10 @@ class EsminiAdapter:
                 yaw_rate=float(h_rate.value) if ret_rate == 0 else 0.0,
                 yaw_acceleration=float(h_acc.value) if ret_acc == 0 else 0.0,
             )
-            self.objects[i].kinematic.CopyFrom(kinematic)
+            self.objects[i] = replace(self.objects[i], kinematic=kinematic)
 
         collisions = self._collect_collision_info()
-        runtime_frame = RuntimeFrame(
+        runtime_frame = RuntimeFrameData(
             sim_time_ns=self._time_ns,
             objects=self.objects,
             collision=collisions,

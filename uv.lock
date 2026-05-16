@@ -26,7 +26,7 @@ dev = [
 ]
 
 [package.metadata]
-requires-dist = [{ name = "pisa-api", git = "https://github.com/pisa-hut/pisa-api.git" }]
+requires-dist = [{ name = "pisa-api", git = "https://github.com/pisa-hut/pisa-api.git?branch=feat%2Fserver-wrapping" }]
 
 [package.metadata.requires-dev]
 dev = [
@@ -88,7 +88,7 @@ wheels = [
 [[package]]
 name = "pisa-api"
 version = "0.2.0"
-source = { git = "https://github.com/pisa-hut/pisa-api.git#06762248e2f35bc4075fa3cd2c11b1d32ecd85db" }
+source = { git = "https://github.com/pisa-hut/pisa-api.git?branch=feat%2Fserver-wrapping#ca7745ef683b7c3d033466e8ffd46868bd054323" }
 dependencies = [
     { name = "grpcio" },
     { name = "protobuf" },

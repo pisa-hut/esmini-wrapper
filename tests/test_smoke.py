@@ -1,9 +1,11 @@
-"""Phase-1 placeholder so `pytest -x` exits 0 in CI.
-
-Real wrapper tests come in Phase 2 — at that point we'll instantiate
-the gRPC servicer and Ping it (catches import/constructor breakage).
-"""
+"""Smoke tests for import-level wrapper integration."""
 
 
-def test_placeholder() -> None:
-    assert True
+def test_public_imports_use_pisa_api_simulator_contract() -> None:
+    from pisa_api.simulator import RuntimeFrameData as PisaRuntimeFrameData
+
+    from esmini_wrapper.esmini import EsminiAdapter
+
+    assert EsminiAdapter.reset.__annotations__["request"].__name__ == "ResetRequest"
+    assert PisaRuntimeFrameData.__name__ == "RuntimeFrameData"
+    assert EsminiAdapter is not None

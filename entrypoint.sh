@@ -1,4 +1,4 @@
 #!/bin/bash
 pushd /app
-uv run esmini_wrapper/server.py
+uv run python -m esmini_wrapper.server
 popd
