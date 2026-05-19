@@ -80,8 +80,9 @@ class SESimpleVehicleState(ct.Structure):
 class Vehicle:
     """Internal helper class, only used inside Simulator."""
 
-    def __init__(self, se, x, y, h, length, speed):
+    def __init__(self, se, x, y, h, length, speed, cfg: dict[str, Any] | None = None):
         self._se = se
+        self._cfg = cfg or {}
         self.sv_handle = self._se.SE_SimpleVehicleCreate(x, y, h, length, speed)
         self.vh_state = SESimpleVehicleState()
         self._se.SE_SimpleVehicleGetState(self.sv_handle, ct.byref(self.vh_state))
@@ -111,12 +112,11 @@ class Vehicle:
             self._se.SE_SimpleVehicleGetState(self.sv_handle, ct.byref(self.vh_state))
 
         elif ctrl.mode == ControlMode.ACKERMANN:
-            # target_speed = ctrl.payload.get("speed", self.vh_state.speed)
-            target_speed = ctrl.payload["speed"]
-            # heading_to_target = ctrl.payload.get("steer", self.vh_state.h)
-            heading_to_target = ctrl.payload["steer"]
-            self._se.SE_SimpleVehicleControlTarget(
-                self.sv_handle, dt_s, target_speed, heading_to_target
+            steer = float(ctrl.payload.get("steer", 0.0))
+            acceleration = self._ackermann_acceleration(ctrl.payload)
+
+            self._se.SE_SimpleVehicleControlAccAndSteer(
+                self.sv_handle, dt_s, acceleration, steer
             )
             # Update vehicle state
             self._se.SE_SimpleVehicleGetState(self.sv_handle, ct.byref(self.vh_state))
@@ -135,12 +135,30 @@ class Vehicle:
         else:
             logger.warning(f"Unsupported control mode: {ctrl.mode}")
 
+    def _ackermann_acceleration(self, payload: dict[str, Any]) -> float:
+        if "speed" in payload:
+            target_speed = float(payload["speed"])
+            speed_error = target_speed - float(self.vh_state.speed)
+            kp = float(self._cfg.get("ackermann_speed_kp", 20.0))
+            acceleration = speed_error * kp
+        else:
+            acceleration = float(payload.get("acceleration", 0.0))
+
+        accel_limit = float(
+            self._cfg.get(
+                "ackermann_accel_limit",
+                self._cfg.get("ackermann_accel_default", 20.0),
+            )
+        )
+        decel_limit = float(self._cfg.get("ackermann_decel_limit", accel_limit))
+        return max(-decel_limit, min(accel_limit, acceleration))
+
 
 TYPE_MAP = {
     0: RoadObjectType.CAR,
     1: RoadObjectType.VAN,
     2: RoadObjectType.TRUCK,
-    3: RoadObjectType.BUS,
+    3: RoadObjectType.SEMITRAILER,
     4: RoadObjectType.TRAILER,
     5: RoadObjectType.BUS,
     6: RoadObjectType.MOTORCYCLE,
@@ -167,6 +185,8 @@ class EsminiAdapter:
 
         # reset
         self._output_dir = None
+        self.obj_count = 0
+        self._object_ids: list[int] = []
 
         self._params_obj = None
         self._params_ptr = None
@@ -290,6 +310,15 @@ class EsminiAdapter:
             ct.c_double,
         ]
         se.SE_SimpleVehicleControlAnalog.restype = None
+
+        # SE_DLL_API void SE_SimpleVehicleControlAccAndSteer(void *handleSimpleVehicle, double dt, double acceleration, double steering_angle);
+        se.SE_SimpleVehicleControlAccAndSteer.argtypes = [
+            ct.c_void_p,
+            ct.c_double,
+            ct.c_double,
+            ct.c_double,
+        ]
+        se.SE_SimpleVehicleControlAccAndSteer.restype = None
 
         # SE_DLL_API void SE_SimpleVehicleControlTarget(void *handleSimpleVehicle, double dt, double target_speed, double heading_to_target);
         se.SE_SimpleVehicleControlTarget.argtypes = [
@@ -464,8 +493,7 @@ class EsminiAdapter:
         collisions: list[CollisionInfoData] = []
         seen_pairs: set[tuple[int, int]] = set()
 
-        for object_index in range(self.obj_count):
-            object_id = self.se.SE_GetId(object_index)
+        for object_id in self._object_ids:
             collision_count = self.se.SE_GetObjectNumberOfCollisions(object_id)
             if collision_count <= 0:
                 continue
@@ -507,11 +535,11 @@ class EsminiAdapter:
 
         params = request.params
 
-        # 1) 把 params 包成 py_object，並轉成 void* 當 user_data
+        # Keep params alive as a Python object and pass it to esmini as void* user data.
         self._params_obj = ct.py_object(params)
         self._params_ptr = ct.cast(ct.pointer(self._params_obj), ct.c_void_p)
 
-        # 2) 建立一次 C 用的 callback（void (*)(void*)）
+        # Create the C callback once and keep a reference to prevent GC.
         if self._c_param_cb is None:
 
             @self._PARAM_CB_TYPE
@@ -520,12 +548,12 @@ class EsminiAdapter:
                 py_obj_ptr = ct.cast(user_data, ct.POINTER(ct.py_object))
                 params_dict = py_obj_ptr.contents.value
 
-                # 呼叫你自己的高階 callback
+                # Delegate to the Python parameter-setting logic.
                 self.parameter_declaration_callback(params_dict)
 
             self._c_param_cb = _c_param_cb  # hold reference
 
-        # 3) 在 SE_Init 前註冊 callback
+        # Register before SE_Init so parameters can affect initial scenario state.
         self.se.SE_RegisterParameterDeclarationCallback(
             self._c_param_cb,
             self._params_ptr,
@@ -534,7 +562,9 @@ class EsminiAdapter:
         map_name = request.scenario_pack.map_name
         map_path = Path(f"/mnt/map/xodr/{map_name}.xodr").resolve()
         self.se.SE_AddPath(str(map_path.parent).encode())
-        disable_controller = 1  # 0 to enable built-in controllers, 1 to disable
+        disable_controller = int(
+            self.cfg.get("disable_controller", self.cfg.get("disable_controllers", 1))
+        )
         xosc_name = request.scenario_pack.name
         xosc_path = Path(f"/mnt/scenario/{xosc_name}.xosc").resolve()
         ret = self.se.SE_Init(
@@ -550,10 +580,20 @@ class EsminiAdapter:
         self._set_collision_detection(self._collision_detection_enabled())
 
         self.obj_count = self.se.SE_GetNumberOfObjects()
+        self._object_ids = [self.se.SE_GetId(i) for i in range(self.obj_count)]
+        if self.obj_count <= 0 or not self._object_ids:
+            raise RuntimeError("esmini scenario contains no objects")
+        invalid_object_ids = [object_id for object_id in self._object_ids if object_id < 0]
+        if invalid_object_ids:
+            raise RuntimeError(f"esmini returned invalid object ids: {invalid_object_ids}")
         self.objects = []
-        for i in range(0, self.obj_count):
+        for object_id in self._object_ids:
             obj_state = SEScenarioObjectState()
-            self.se.SE_GetObjectState(self.se.SE_GetId(i), ct.byref(obj_state))
+            ret_state = self.se.SE_GetObjectState(object_id, ct.byref(obj_state))
+            if ret_state != 0:
+                raise RuntimeError(
+                    f"SE_GetObjectState failed for object id {object_id} (ret={ret_state})"
+                )
 
             esmini_obj_type = int(obj_state.objectType)
             obj_category = int(obj_state.objectCategory)
@@ -567,11 +607,11 @@ class EsminiAdapter:
                     obj_type = RoadObjectType.ANIMAL
                 else:
                     obj_type = RoadObjectType.UNKNOWN
-            else:  # Vehicle type
+            elif esmini_obj_type == 1:  # Vehicle type
                 obj_type = TYPE_MAP.get(obj_category, RoadObjectType.UNKNOWN)
 
             obj_kinematic = ObjectKinematicData(
-                time_ns=int(obj_state.timestamp * 1e9),
+                time_ns=self._time_ns,
                 x=float(obj_state.x),
                 y=float(obj_state.y),
                 z=float(obj_state.z),
@@ -603,6 +643,7 @@ class EsminiAdapter:
             h=float(self.objects[0].kinematic.yaw),
             length=float(self.objects[0].shape.dimensions.x),
             speed=float(self.objects[0].kinematic.speed),
+            cfg=self.cfg,
         )
 
         collisions = self._collect_collision_info()
@@ -610,51 +651,69 @@ class EsminiAdapter:
             sim_time_ns=self._time_ns,
             objects=self.objects,
             collision=collisions,
+            extras={"object_ids": self._object_ids},
         )
 
         return runtime_frame
 
     def step(self, request: StepRequest):
         # ctrl = Ctrl.from_pb(ctrl)
-        dt_s = (request.timestamp_ns - self._time_ns) / 1e9
-        self._time_ns = request.timestamp_ns
+        next_time_ns = request.timestamp_ns
+        if next_time_ns < self._time_ns:
+            raise RuntimeError(
+                f"step timestamp must be monotonic: got {next_time_ns}, current {self._time_ns}"
+            )
+        dt_s = (next_time_ns - self._time_ns) / 1e9
 
         se = self.se
 
         # Update vehicle control
         self.ego_car.apply_control(request.ctrl_cmd, dt_s)
-        obj_id = se.SE_GetId(0)
-        se.SE_ReportObjectPosXYH(
+        obj_id = self._object_ids[0]
+        ret_pos = se.SE_ReportObjectPosXYH(
             obj_id,
             self.ego_car.vh_state.x,
             self.ego_car.vh_state.y,
             self.ego_car.vh_state.h,
         )
-        se.SE_ReportObjectWheelStatus(
+        if ret_pos != 0:
+            raise RuntimeError(f"SE_ReportObjectPosXYH failed for object id {obj_id} (ret={ret_pos})")
+        ret_wheel = se.SE_ReportObjectWheelStatus(
             obj_id,
             self.ego_car.vh_state.wheel_rotation,
             self.ego_car.vh_state.wheel_angle,
         )
-        se.SE_ReportObjectSpeed(
+        if ret_wheel != 0:
+            raise RuntimeError(
+                f"SE_ReportObjectWheelStatus failed for object id {obj_id} (ret={ret_wheel})"
+            )
+        ret_speed = se.SE_ReportObjectSpeed(
             obj_id,
             self.ego_car.vh_state.speed,
         )
-        se.SE_StepDT(dt_s)
+        if ret_speed != 0:
+            raise RuntimeError(f"SE_ReportObjectSpeed failed for object id {obj_id} (ret={ret_speed})")
+
+        ret_step = se.SE_StepDT(dt_s)
+        if ret_step != 0:
+            raise RuntimeError(f"esmini SE_StepDT failed with code {ret_step}")
+
+        self._time_ns = next_time_ns
         # Update object state
-        for i in range(0, self.obj_count):
+        for i, object_id in enumerate(self._object_ids):
             # Get object state
             obj_state = SEScenarioObjectState()
-            ret_state = se.SE_GetObjectState(se.SE_GetId(i), ct.byref(obj_state))
+            ret_state = se.SE_GetObjectState(object_id, ct.byref(obj_state))
 
             # Get object acceleration
-            obj_accel = se.SE_GetObjectAcceleration(se.SE_GetId(i))
+            obj_accel = se.SE_GetObjectAcceleration(object_id)
 
             # Get object angular velocity
             h_rate = ct.c_double()
             p_rate = ct.c_double()
             r_rate = ct.c_double()
             ret_rate = se.SE_GetObjectAngularVelocity(
-                se.SE_GetId(i), ct.byref(h_rate), ct.byref(p_rate), ct.byref(r_rate)
+                object_id, ct.byref(h_rate), ct.byref(p_rate), ct.byref(r_rate)
             )
 
             # Get object angular acceleration
@@ -662,15 +721,17 @@ class EsminiAdapter:
             p_acc = ct.c_double()
             r_acc = ct.c_double()
             ret_acc = se.SE_GetObjectAngularAcceleration(
-                se.SE_GetId(i), ct.byref(h_acc), ct.byref(p_acc), ct.byref(r_acc)
+                object_id, ct.byref(h_acc), ct.byref(p_acc), ct.byref(r_acc)
             )
 
             if ret_state != 0:
-                logger.warning(f"SE_GetObjectState failed for object id {i} (ret={ret_state})")
+                logger.warning(
+                    f"SE_GetObjectState failed for object id {object_id} (ret={ret_state})"
+                )
                 continue
 
             kinematic = ObjectKinematicData(
-                time_ns=int(obj_state.timestamp * 1e9),
+                time_ns=self._time_ns,
                 x=float(obj_state.x),
                 y=float(obj_state.y),
                 z=float(obj_state.z),
@@ -687,6 +748,7 @@ class EsminiAdapter:
             sim_time_ns=self._time_ns,
             objects=self.objects,
             collision=collisions,
+            extras={"object_ids": self._object_ids},
         )
 
         return runtime_frame
@@ -695,19 +757,26 @@ class EsminiAdapter:
         if self.se is None:
             return
 
-        self._set_collision_detection(False)
-        self.se.SE_UnsetOption(b"logfile_path")
-        self.se.SE_Close()
-
         if self.ego_car is not None:
             self.se.SE_SimpleVehicleDelete(self.ego_car.sv_handle)
             self.ego_car = None
+
+        self._set_collision_detection(False)
+        self.se.SE_UnsetOption(b"disable_stdout")
+        self.se.SE_Close()
+        self.se.SE_ClearPaths()
+        self.objects = []
+        self._object_ids = []
+        self.obj_count = 0
+        self._time_ns = 0
         logger.info("Esmini simulator stopped.")
 
     def parameter_declaration_callback(self, params: dict[str, Any]) -> int:
         """
-        這個是你真的想寫的邏輯：用 dict 設定 parameter。
-        C 那邊看不到這個，只會呼叫底下包好的 _c_param_cb。
+        Apply parameter overrides from a Python dict.
+
+        esmini only calls the C-compatible wrapper callback; this method keeps the
+        Python-side parameter conversion and validation in one place.
         """
         n = self.se.SE_GetNumberOfParameters()
         param_type = {}
@@ -757,7 +826,7 @@ class EsminiAdapter:
                 logger.warning(f"Parameter {name} has unknown type {ptype}. Skip.")
                 continue
 
-        # 這個 return 給自己用就好，C callback 是 void，不會用到
+        # The C callback is void; this return value is only useful to Python callers.
         return 0
 
     # define a function returning if the simulator need to stop
