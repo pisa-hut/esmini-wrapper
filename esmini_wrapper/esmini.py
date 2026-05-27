@@ -115,9 +115,7 @@ class Vehicle:
             steer = float(ctrl.payload.get("steer", 0.0))
             acceleration = self._ackermann_acceleration(ctrl.payload)
 
-            self._se.SE_SimpleVehicleControlAccAndSteer(
-                self.sv_handle, dt_s, acceleration, steer
-            )
+            self._se.SE_SimpleVehicleControlAccAndSteer(self.sv_handle, dt_s, acceleration, steer)
             # Update vehicle state
             self._se.SE_SimpleVehicleGetState(self.sv_handle, ct.byref(self.vh_state))
 
@@ -677,7 +675,9 @@ class EsminiAdapter:
             self.ego_car.vh_state.h,
         )
         if ret_pos != 0:
-            raise RuntimeError(f"SE_ReportObjectPosXYH failed for object id {obj_id} (ret={ret_pos})")
+            raise RuntimeError(
+                f"SE_ReportObjectPosXYH failed for object id {obj_id} (ret={ret_pos})"
+            )
         ret_wheel = se.SE_ReportObjectWheelStatus(
             obj_id,
             self.ego_car.vh_state.wheel_rotation,
@@ -692,7 +692,9 @@ class EsminiAdapter:
             self.ego_car.vh_state.speed,
         )
         if ret_speed != 0:
-            raise RuntimeError(f"SE_ReportObjectSpeed failed for object id {obj_id} (ret={ret_speed})")
+            raise RuntimeError(
+                f"SE_ReportObjectSpeed failed for object id {obj_id} (ret={ret_speed})"
+            )
 
         ret_step = se.SE_StepDT(dt_s)
         if ret_step != 0:
