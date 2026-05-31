@@ -7,6 +7,7 @@ from pisa_api.simulator import (
     ControlCommand,
     ControlMode,
     RoadObjectType,
+    ShouldQuitResponse,
     SimulatorUnavailable,
     StepRequest,
     StepResponse,
@@ -26,8 +27,9 @@ def test_public_imports_use_pisa_api_simulator_contract() -> None:
 
 
 class FakeSE:
-    def __init__(self, *, step_ret: int = 0):
+    def __init__(self, *, step_ret: int = 0, quit_flag: int = 0):
         self.step_ret = step_ret
+        self.quit_flag = quit_flag
         self.control_acc_and_steer_calls = []
         self.report_pos_calls = []
         self.report_wheel_calls = []
@@ -108,6 +110,9 @@ class FakeSE:
 
     def SE_GetObjectNumberOfCollisions(self, _object_id):
         return 0
+
+    def SE_GetQuitFlag(self):
+        return self.quit_flag
 
 
 def test_ackermann_control_tracks_speed_target_and_steering_angle() -> None:
@@ -233,3 +238,31 @@ def test_step_returns_wrapper_time_and_object_ids() -> None:
     assert frame.sim_time_ns == 2_000_000_000
     assert frame.objects[0].kinematic.time_ns == 2_000_000_000
     assert frame.extras["object_ids"] == [7]
+
+
+def test_should_quit_returns_pisa_api_response_with_running_message() -> None:
+    from esmini_wrapper.esmini import EsminiAdapter
+
+    adapter = EsminiAdapter()
+    adapter.se = FakeSE(quit_flag=0)
+
+    response = adapter.should_quit()
+
+    assert response == ShouldQuitResponse(
+        should_quit=False,
+        msg="esmini simulator is running",
+    )
+
+
+def test_should_quit_returns_pisa_api_response_with_shutdown_message() -> None:
+    from esmini_wrapper.esmini import EsminiAdapter
+
+    adapter = EsminiAdapter()
+    adapter.se = FakeSE(quit_flag=1)
+
+    response = adapter.should_quit()
+
+    assert response == ShouldQuitResponse(
+        should_quit=True,
+        msg="esmini simulator requested shutdown",
+    )

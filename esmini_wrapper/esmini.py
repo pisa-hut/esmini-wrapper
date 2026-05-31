@@ -19,6 +19,7 @@ from pisa_api.simulator import (
     ShapeData,
     ShapeDimensionData,
     ShapeType,
+    ShouldQuitResponse,
     SimulatorPreconditionFailed,
     SimulatorUnavailable,
     StepRequest,
@@ -860,5 +861,15 @@ class EsminiAdapter:
         return 0
 
     # define a function returning if the simulator need to stop
-    def should_quit(self):
-        return self.se.SE_GetQuitFlag()
+    def should_quit(self) -> ShouldQuitResponse:
+        if self.se is None:
+            return ShouldQuitResponse(
+                should_quit=False,
+                msg="esmini simulator is not initialized",
+            )
+
+        should_quit = bool(self.se.SE_GetQuitFlag())
+        msg = (
+            "esmini simulator requested shutdown" if should_quit else "esmini simulator is running"
+        )
+        return ShouldQuitResponse(should_quit=should_quit, msg=msg)
