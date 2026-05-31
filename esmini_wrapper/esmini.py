@@ -9,15 +9,20 @@ from pisa_api.simulator import (
     ControlCommand,
     ControlMode,
     InitRequest,
+    InvalidSimulatorRequest,
     ObjectKinematicData,
     ObjectStateData,
     ResetRequest,
+    ResetResponse,
     RoadObjectType,
     RuntimeFrameData,
     ShapeData,
     ShapeDimensionData,
     ShapeType,
+    SimulatorPreconditionFailed,
+    SimulatorUnavailable,
     StepRequest,
+    StepResponse,
 )
 
 logger = logging.getLogger(__name__)
@@ -472,8 +477,11 @@ class EsminiAdapter:
         self.esmini_home = self.cfg.get("esmini_home", "/opt/esmini/")
         lib_path = Path(self.esmini_home) / "bin" / "libesminiLib.so"
         if not lib_path.is_file():
-            raise FileNotFoundError(f"esmini shared library not found at: {lib_path}")
-        self.se = ct.CDLL(str(lib_path))  # Linux
+            raise SimulatorUnavailable(f"esmini shared library not found at: {lib_path}")
+        try:
+            self.se = ct.CDLL(str(lib_path))  # Linux
+        except OSError as exc:
+            raise SimulatorUnavailable(f"failed to load esmini shared library: {exc}") from exc
         self._setup_function_signatures()
 
     def _collision_detection_enabled(self) -> bool:
@@ -525,6 +533,7 @@ class EsminiAdapter:
 
     def reset(self, request: ResetRequest):
         self._output_dir = self._output_base / request.output_dir
+        self._output_dir.mkdir(parents=True, exist_ok=True)
 
         self.stop()
 
@@ -556,15 +565,27 @@ class EsminiAdapter:
             self._c_param_cb,
             self._params_ptr,
         )
-        use_viewer, threads, record = self._setup_esmini_opts()
+        try:
+            use_viewer, threads, record = self._setup_esmini_opts()
+            disable_controller = int(
+                self.cfg.get("disable_controller", self.cfg.get("disable_controllers", 1))
+            )
+        except (TypeError, ValueError) as exc:
+            raise InvalidSimulatorRequest(f"invalid esmini config: {exc}") from exc
+
         map_name = request.scenario_pack.map_name
+        if not map_name:
+            raise InvalidSimulatorRequest("scenario_pack.map_name is required")
         map_path = Path(f"/mnt/map/xodr/{map_name}.xodr").resolve()
+        if not map_path.is_file():
+            raise InvalidSimulatorRequest(f"map not found: {map_path}")
         self.se.SE_AddPath(str(map_path.parent).encode())
-        disable_controller = int(
-            self.cfg.get("disable_controller", self.cfg.get("disable_controllers", 1))
-        )
         xosc_name = request.scenario_pack.name
+        if not xosc_name:
+            raise InvalidSimulatorRequest("scenario_pack.name is required")
         xosc_path = Path(f"/mnt/scenario/{xosc_name}.xosc").resolve()
+        if not xosc_path.is_file():
+            raise InvalidSimulatorRequest(f"OpenSCENARIO file not found: {xosc_path}")
         ret = self.se.SE_Init(
             str(xosc_path).encode(),
             disable_controller,
@@ -573,23 +594,25 @@ class EsminiAdapter:
             record,
         )
         if ret != 0:
-            raise RuntimeError(f"esmini SE_Init failed with code {ret}")
+            raise InvalidSimulatorRequest(f"esmini SE_Init failed with code {ret}")
 
         self._set_collision_detection(self._collision_detection_enabled())
 
         self.obj_count = self.se.SE_GetNumberOfObjects()
         self._object_ids = [self.se.SE_GetId(i) for i in range(self.obj_count)]
         if self.obj_count <= 0 or not self._object_ids:
-            raise RuntimeError("esmini scenario contains no objects")
+            raise SimulatorPreconditionFailed("esmini scenario contains no objects")
         invalid_object_ids = [object_id for object_id in self._object_ids if object_id < 0]
         if invalid_object_ids:
-            raise RuntimeError(f"esmini returned invalid object ids: {invalid_object_ids}")
+            raise SimulatorPreconditionFailed(
+                f"esmini returned invalid object ids: {invalid_object_ids}"
+            )
         self.objects = []
         for object_id in self._object_ids:
             obj_state = SEScenarioObjectState()
             ret_state = self.se.SE_GetObjectState(object_id, ct.byref(obj_state))
             if ret_state != 0:
-                raise RuntimeError(
+                raise SimulatorPreconditionFailed(
                     f"SE_GetObjectState failed for object id {object_id} (ret={ret_state})"
                 )
 
@@ -643,6 +666,8 @@ class EsminiAdapter:
             speed=float(self.objects[0].kinematic.speed),
             cfg=self.cfg,
         )
+        if not self.ego_car.sv_handle:
+            raise SimulatorPreconditionFailed("failed to spawn ego vehicle")
 
         collisions = self._collect_collision_info()
         runtime_frame = RuntimeFrameData(
@@ -652,13 +677,13 @@ class EsminiAdapter:
             extras={"object_ids": self._object_ids},
         )
 
-        return runtime_frame
+        return ResetResponse(frame=runtime_frame)
 
     def step(self, request: StepRequest):
         # ctrl = Ctrl.from_pb(ctrl)
         next_time_ns = request.timestamp_ns
         if next_time_ns < self._time_ns:
-            raise RuntimeError(
+            raise InvalidSimulatorRequest(
                 f"step timestamp must be monotonic: got {next_time_ns}, current {self._time_ns}"
             )
         dt_s = (next_time_ns - self._time_ns) / 1e9
@@ -666,7 +691,10 @@ class EsminiAdapter:
         se = self.se
 
         # Update vehicle control
-        self.ego_car.apply_control(request.ctrl_cmd, dt_s)
+        try:
+            self.ego_car.apply_control(request.ctrl_cmd, dt_s)
+        except (KeyError, TypeError, ValueError) as exc:
+            raise InvalidSimulatorRequest(f"invalid control command: {exc}") from exc
         obj_id = self._object_ids[0]
         ret_pos = se.SE_ReportObjectPosXYH(
             obj_id,
@@ -675,7 +703,7 @@ class EsminiAdapter:
             self.ego_car.vh_state.h,
         )
         if ret_pos != 0:
-            raise RuntimeError(
+            raise SimulatorPreconditionFailed(
                 f"SE_ReportObjectPosXYH failed for object id {obj_id} (ret={ret_pos})"
             )
         ret_wheel = se.SE_ReportObjectWheelStatus(
@@ -684,7 +712,7 @@ class EsminiAdapter:
             self.ego_car.vh_state.wheel_angle,
         )
         if ret_wheel != 0:
-            raise RuntimeError(
+            raise SimulatorPreconditionFailed(
                 f"SE_ReportObjectWheelStatus failed for object id {obj_id} (ret={ret_wheel})"
             )
         ret_speed = se.SE_ReportObjectSpeed(
@@ -692,13 +720,13 @@ class EsminiAdapter:
             self.ego_car.vh_state.speed,
         )
         if ret_speed != 0:
-            raise RuntimeError(
+            raise SimulatorPreconditionFailed(
                 f"SE_ReportObjectSpeed failed for object id {obj_id} (ret={ret_speed})"
             )
 
         ret_step = se.SE_StepDT(dt_s)
         if ret_step != 0:
-            raise RuntimeError(f"esmini SE_StepDT failed with code {ret_step}")
+            raise SimulatorUnavailable(f"esmini SE_StepDT failed with code {ret_step}")
 
         self._time_ns = next_time_ns
         # Update object state
@@ -753,7 +781,7 @@ class EsminiAdapter:
             extras={"object_ids": self._object_ids},
         )
 
-        return runtime_frame
+        return StepResponse(frame=runtime_frame)
 
     def stop(self):
         if self.se is None:

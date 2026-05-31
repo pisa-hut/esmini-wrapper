@@ -7,7 +7,9 @@ from pisa_api.simulator import (
     ControlCommand,
     ControlMode,
     RoadObjectType,
+    SimulatorUnavailable,
     StepRequest,
+    StepResponse,
 )
 from pisa_api.simulator import (
     RuntimeFrameData as PisaRuntimeFrameData,
@@ -172,7 +174,7 @@ def test_step_failure_does_not_advance_wrapper_time() -> None:
     adapter.objects = [ObjectStateData(kinematic=ObjectKinematicData(time_ns=1_000_000_000))]
     adapter.ego_car = Vehicle(se, x=1.0, y=2.0, h=0.3, length=4.5, speed=4.0)
 
-    with pytest.raises(RuntimeError, match="SE_StepDT failed"):
+    with pytest.raises(SimulatorUnavailable, match="SE_StepDT failed"):
         adapter.step(
             StepRequest(
                 ctrl_cmd=ControlCommand(mode=ControlMode.NONE),
@@ -181,6 +183,30 @@ def test_step_failure_does_not_advance_wrapper_time() -> None:
         )
 
     assert adapter._time_ns == 1_000_000_000
+
+
+def test_step_returns_pisa_api_step_response() -> None:
+    from esmini_wrapper.esmini import EsminiAdapter, ObjectKinematicData, ObjectStateData, Vehicle
+
+    se = FakeSE()
+    adapter = EsminiAdapter()
+    adapter.se = se
+    adapter.cfg = {}
+    adapter._time_ns = 1_000_000_000
+    adapter.obj_count = 1
+    adapter._object_ids = [7]
+    adapter.objects = [ObjectStateData(kinematic=ObjectKinematicData(time_ns=1_000_000_000))]
+    adapter.ego_car = Vehicle(se, x=1.0, y=2.0, h=0.3, length=4.5, speed=4.0)
+
+    response = adapter.step(
+        StepRequest(
+            ctrl_cmd=ControlCommand(mode=ControlMode.NONE),
+            timestamp_ns=2_000_000_000,
+        )
+    )
+
+    assert isinstance(response, StepResponse)
+    assert response.frame.sim_time_ns == 2_000_000_000
 
 
 def test_step_returns_wrapper_time_and_object_ids() -> None:
@@ -196,13 +222,14 @@ def test_step_returns_wrapper_time_and_object_ids() -> None:
     adapter.objects = [ObjectStateData(kinematic=ObjectKinematicData(time_ns=1_000_000_000))]
     adapter.ego_car = Vehicle(se, x=1.0, y=2.0, h=0.3, length=4.5, speed=4.0)
 
-    frame = adapter.step(
+    response = adapter.step(
         StepRequest(
             ctrl_cmd=ControlCommand(mode=ControlMode.NONE),
             timestamp_ns=2_000_000_000,
         )
     )
 
+    frame = response.frame
     assert frame.sim_time_ns == 2_000_000_000
     assert frame.objects[0].kinematic.time_ns == 2_000_000_000
     assert frame.extras["object_ids"] == [7]
