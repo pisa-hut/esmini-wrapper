@@ -94,3 +94,54 @@ jobs:
         # This step uses the identity token to provision an ephemeral certificate
         # against the sigstore community Fulcio instance.
         run: echo "${TAGS}" | xargs -I {} cosign sign --yes {}@${DIGEST}
+
+      # ─── Apptainer SIF build + push (oras://ghcr.io/<repo>-sif) ────────
+      # Builds the SIF from the docker image we just pushed (pinned by
+      # digest so we ship the exact bits we built), then pushes to a
+      # SIF-specific package so the DB-stored URL pattern
+      # `oras://ghcr.io/<repo>-sif:<tag>` works for the executor's
+      # `apptainer pull` (cache-aware: no-op when unchanged).
+      - name: Set up Apptainer
+        if: github.event_name != 'pull_request'
+        uses: eWaterCycle/setup-apptainer@v2
+        with:
+          apptainer-version: 1.3.6
+      - name: Build and push Apptainer SIF
+        if: github.event_name != 'pull_request'
+        env:
+          DIGEST: ${{ steps.build-and-push.outputs.digest }}
+        run: |
+          set -euo pipefail
+          # SIF package: separate from the docker package so client tools
+          # don't have to disambiguate artifact types within one repo.
+          SIF_REPO="$(echo '${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-sif' | tr '[:upper:]' '[:lower:]')"
+          DOCKER_PINNED="${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@${DIGEST}"
+
+          # %startscript mirrors the controller-side def at
+          # ~/ansible/defs/esmini.def so the runtime behaviour matches
+          # what executor / wrappers expect today.
+          cat > apptainer.def <<EOF
+          Bootstrap: docker
+          From: ${DOCKER_PINNED}
+
+          %startscript
+          #!/bin/bash
+          bash /app/entrypoint.sh
+          EOF
+
+          # Apptainer auths to ghcr.io with the same GITHUB_TOKEN used
+          # for the docker push above.
+          echo "${{ secrets.GITHUB_TOKEN }}" | apptainer remote login \
+            --username "${{ github.actor }}" --password-stdin \
+            "oras://${{ env.REGISTRY }}"
+
+          apptainer build wrapper.sif apptainer.def
+
+          # Always push :<ref>; also tag :latest when on main.
+          REF_TAG="${{ github.ref_name }}"
+          apptainer push wrapper.sif "oras://${SIF_REPO}:${REF_TAG}"
+          if [ "${{ github.ref }}" = "refs/heads/main" ]; then
+            apptainer push wrapper.sif "oras://${SIF_REPO}:latest"
+          fi
+
+          echo "SIF pushed: oras://${SIF_REPO}:${REF_TAG}"
