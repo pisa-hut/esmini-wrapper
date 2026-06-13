@@ -111,7 +111,7 @@ class Vehicle:
             throttle = ctrl.payload["throttle"]
             steer = ctrl.payload["steer"]
             brake = ctrl.payload["brake"]
-            final_throttle = throttle - brake  # Simple way to combine throttle and brake
+            final_throttle = max(0, throttle - brake)  # Simple way to combine throttle and brake
 
             self._se.SE_SimpleVehicleControlAnalog(self.sv_handle, dt_s, final_throttle, steer)
             # Update vehicle state
